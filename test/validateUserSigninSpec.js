@@ -2,6 +2,9 @@ var expect = require('expect.js');
 var express = require('express');
 var nock = require('nock');
 var request = require('supertest');
+var bodyParser = require('body-parser');  
+var cookieParser = require('cookie-parser');
+var session = require('express-session');
 
 describe('login with validateUser test', function() {
 
@@ -31,12 +34,14 @@ describe('login with validateUser test', function() {
 
   before(function() {
     app = express();
-    app.configure(function() {
-      app.use(express.bodyParser());
-      app.use(express.cookieParser());
-      app.use(express.session({ secret: 'foobar'}));
-      app.use(user(config)); 
-    });
+    app.use(bodyParser.json());
+    app.use(cookieParser());
+    app.use(session({ 
+      secret: 'foobar', 
+      resave: false, 
+      saveUninitialized: false
+    }));
+    app.use(user(config)); 
   });
 
   afterEach(function() {
@@ -68,7 +73,6 @@ describe('login with validateUser test', function() {
       message: 'Exceeded fail login attempts', 
       error: 'Forbidden' 
     };
-
     request(app)
       .post('/api/user/signin')
       .send({ name: 'foo', password: 'foo' }) 

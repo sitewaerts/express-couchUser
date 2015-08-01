@@ -95,7 +95,6 @@ module.exports = function(config) {
   // * name
   // * password
   app.post('/api/user/signin', function(req, res) {
-
     if (!req.body || !req.body.name || !req.body.password) {
       return res.status(400).send(JSON.stringify({ok: false, message: 'A name, and password are required.'}));
     }
@@ -111,7 +110,6 @@ module.exports = function(config) {
     function populateSessionWithUser(cb) {
       return function(err, body, headers) {
         if (err) { return cb(err); }
-
         getUserName(body.name, headers['set-cookie'], function(err, name) {
           if (err) { return cb(err); }
 
@@ -420,14 +418,13 @@ app.get('/api/user/code/:code', function(req, res) {
   });
 
   // Delete a user
-  app.del('/api/user/:name', function(req,res) {
+  app.delete('/api/user/:name', function(req,res) {
     if (!req.session || !req.session.user) {
       return res.status(401).send(JSON.stringify({ok: false, message: "You must be logged in to use this function"}));
     }
     else if (config.adminRoles && !hasAdminPermission(req.session.user)) {
       return res.status(403).send(JSON.stringify({ok:false, message: "You do not have permission to use this function."}));
     }
-
     db.get('org.couchdb.user:' + req.params.name, function(err,user) {
       if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
 

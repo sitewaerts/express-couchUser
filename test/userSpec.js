@@ -3,6 +3,9 @@ var express = require('express');
 var nock = require('nock');
 var request = require('supertest');
 var _ = require('underscore');
+var bodyParser = require('body-parser');  
+var cookieParser = require('cookie-parser');
+var session = require('express-session');
 
 //nock.recorder.rec();
 
@@ -36,36 +39,38 @@ describe('User API Tests', function() {
   var app;
   before(function() {
     app = express();
-    app.configure(function() {
-      app.use(express.bodyParser());
-      app.use(express.cookieParser());
-      app.use(express.session({ secret: 'foobar'}));
-      app.use(function(req, res, next) {
-        //for mocking admin/user login
-        if(req.header('isAdmin') === 'true') {
-          req.session.regenerate(function() {
-            req.session.user = adminUser;
-            next();
-          });
-        } else if(req.header('isAdmin') === 'false') {
-          req.session.regenerate(function() {
-            req.session.user = userDoc;
-            next();
-          });
-        } else {
+    app.use(bodyParser.json());
+    app.use(cookieParser());
+    app.use(session({
+      secret: 'foobar',
+      resave: false, 
+      saveUninitialized: false
+    }));
+    app.use(function(req, res, next) {
+      //for mocking admin/user login
+      if(req.header('isAdmin') === 'true') {
+        req.session.regenerate(function() {
+          req.session.user = adminUser;
           next();
-        }
-      });
-      app.use('/captureSessionBefore', function(req, res) {
-        captureSession.before = req.session.user;
-        res.send(200); 
-      });
-      app.use('/captureSessionAfter', function(req, res) {
-        captureSession.after = req.session.user;
-        res.send(200);
-      });
-      app.use(user(config));
+        });
+      } else if(req.header('isAdmin') === 'false') {
+        req.session.regenerate(function() {
+          req.session.user = userDoc;
+          next();
+        });
+      } else {
+        next();
+      }
     });
+    app.use('/captureSessionBefore', function(req, res) {
+      captureSession.before = req.session.user;
+      res.status(200).send({ ok: true }); 
+    });
+    app.use('/captureSessionAfter', function(req, res) {
+      captureSession.after = req.session.user;
+      res.status(200).send({ ok: true });
+    });
+    app.use(user(config));
   });
 
   afterEach(function() {
@@ -365,7 +370,7 @@ describe('User API Tests', function() {
     it('should return a 200', function(done) {
       var mockReply = _.extend(_.clone(userDoc), { _id: 'org.couchdb.user:adminFoo', _rev: '1-234' });
 
-      nock('http://localhost:5984:5984')
+      nock('http://localhost:5984')
         .get('/_users/org.couchdb.user%3Afoo')
           .reply(200, JSON.stringify(mockReply))
         .delete('/_users/org.couchdb.user%3AadminFoo?rev=1-234')

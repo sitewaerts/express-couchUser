@@ -6,7 +6,9 @@ var userView = require('../lib/user');
 var couchUrl = process.env.COUCH || 'http://localhost:5984';
 var nano = require('nano')(couchUrl);
 var _ = require('underscore');
-
+var bodyParser = require('body-parser');
+var cookieParser = require('cookie-parser');
+var session = require('express-session');
 var request = require('supertest');
 
 //nock.recorder.rec();
@@ -35,13 +37,14 @@ describe('User sign up', function() {
   };
 
   beforeEach(function() {
-    app.configure(function() {
-      app.use(express.bodyParser());
-      app.use(express.cookieParser());
-      app.use(express.session({ secret: 'foobar'}));
-      app.use(user(config));
-
-    });
+    app.use(bodyParser.json());
+    app.use(cookieParser());
+    app.use(session({ 
+      secret: 'foobar',
+      resave: false, 
+      saveUninitialized: false
+    }));
+    app.use(user(config));
   });
 
   afterEach(function() {
