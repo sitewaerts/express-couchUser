@@ -16,7 +16,13 @@ var couchUser = require('express-couchUser');
 var express = require('express');
 var cookieParser = require('cookie-parser');
 var session = require('express-session');
+var bodyParser = require('body-parser');
 var app = express();
+
+// parse application/x-www-form-urlencoded
+app.use(bodyParser.urlencoded({ extended: false }));
+// parse application/json
+app.use(bodyParser.json());
 
 // Required for session storage
 app.use(cookieParser());

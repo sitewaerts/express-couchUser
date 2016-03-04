@@ -20,7 +20,7 @@ module.exports = function(config) {
   function configureNano(cookie) {
     return nano({
       url: config.users,
-      request_defaults: config.request_defaults,
+      requestDefaults: config.request_defaults,
       cookie: cookie
     });
   }
@@ -44,15 +44,16 @@ module.exports = function(config) {
   }
 
   // required properties on req.body
-  // * name
-  // * password
-  // * email
+  // * String: name
+  // * String: password
+  // * String: email
+  // * Array of Strings: roles
   //
   // ### note: you can add more properties to
   // your user registration object
   app.post('/api/user/signup', function(req, res) {
-    if (!req.body || !req.body.name || !req.body.password || !req.body.email) {
-      return res.status(400).send(JSON.stringify({ok: false, message: 'A name, password, and email address are required.'}));
+    if (!req.body || !req.body.name || !req.body.password || !req.body.email || !req.body.roles) {
+      return res.status(400).send(JSON.stringify({ok: false, message: 'A name, password, email address and roles are required.'}));
     }
 
     if (req.body.confirm_password) delete req.body.confirm_password;
@@ -61,7 +62,7 @@ module.exports = function(config) {
 
     // Check to see whether a user with the same email address already exists.  Throw an error if it does.
     db.view('user', 'all', { key: req.body.email }, function(err, body) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
       if (body.rows && body.rows.length > 0) { 
         return res.status(400).send({ok: false, message: "A user with this email address already exists.  Try resetting your password instead."});
       }
@@ -71,18 +72,18 @@ module.exports = function(config) {
     });
 
     function done(err, body) {
-      if (err) { return res.status(err.status_code).send(err); }
+      if (err) { return res.status(err.statusCode).send(err); }
 
       if (config.verify) {
         try {
           validateUserByEmail(req.body.email);
           db.get(body._id, function(err,user) {
-            if (err) { return res.status(err.status_code).send(err); }
+            if (err) { return res.status(err.statusCode).send(err); }
             res.status(200).send(JSON.stringify({ok: true, user: strip(user)}));
           });
         }
         catch (email_err) {
-          res.status(err.status_code).send(email_err);
+          res.status(err.statusCode).send(email_err);
         }
       } else {
         res.status(200).send(JSON.stringify( _.extend(req.body, {_rev: body.rev, ok: true} ) ));
@@ -204,7 +205,7 @@ module.exports = function(config) {
     // generate uuid code
     // and save user record
     function saveUser(err, body) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
 
       if (body.rows && body.rows.length === 0) {
         return res.status(500).send(JSON.stringify({ ok: false, message: 'No user found with that email.' }));
@@ -223,13 +224,13 @@ module.exports = function(config) {
 
     // initialize the emailTemplate engine
     function createEmail(err, body) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500, err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
       emailTemplates(config.email.templateDir, renderForgotTemplate);
     }
 
     // render forgot.ejs
     function renderForgotTemplate(err, template) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500, err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
       // use header host for reset url
       config.app.url = 'http://' + req.headers.host;
       template('forgot', { user: user, app: config.app }, sendEmail);
@@ -237,7 +238,7 @@ module.exports = function(config) {
 
     // send rendered template to user
     function sendEmail(err, html, text) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500, err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
       if (!transport) { return res.status(500, { error: 'transport is not configured!'}); }
       transport.sendMail({
         from: config.email.from,
@@ -249,7 +250,7 @@ module.exports = function(config) {
 
     // complete action
     function done(err, status) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500, err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
       res.status(200).send(JSON.stringify({ ok: true, message: "forgot password link sent..." }));
       //app.emit('user: forgot password', user);
     }
@@ -262,7 +263,7 @@ app.get('/api/user/code/:code', function(req, res) {
   }
 
   db.view('user', 'code', {key: req.params.code}, function(err, body) {
-    if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+    if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
     if (body.rows.length > 1) {
       return res.status(500).send(JSON.stringify({ ok: false, message: 'More than one user found.'}));
     } else if (body.rows.length === 0) {
@@ -290,7 +291,7 @@ app.get('/api/user/code/:code', function(req, res) {
       // get user by code
       db.view('user', 'code', { key: req.body.code }, checkCode);
       function checkCode(err, body) {
-        if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
         if (body.rows && body.rows.length === 0) {
           return res.status(500).send(JSON.stringify({ok: false, message: 'Not Found'}));
         }
@@ -299,7 +300,7 @@ app.get('/api/user/code/:code', function(req, res) {
       // clear code
       delete user.code;
       db.insert(user, user._id, function(err,user) {
-        if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
         return res.status(200).send(JSON.stringify({ok: true, user: strip(user) }));
       });
     }
@@ -318,7 +319,7 @@ app.get('/api/user/code/:code', function(req, res) {
         res.status(200).send(JSON.stringify({ok:true, message: "Verification code sent..."}));
       }
       catch (validate_err) {
-        res.status(validate_err.status_code).send(validate_err);
+        res.status(validate_err.statusCode).send(validate_err);
       }
     });
 
@@ -336,7 +337,7 @@ app.get('/api/user/code/:code', function(req, res) {
         db.view('user', 'verification_code', { key: req.params.code }, saveUser);
 
         function saveUser(err, body) {
-          if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+          if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
 
           if (body.rows && body.rows.length === 0) {
             return res.status(400).send(JSON.stringify({ ok: false, message: 'Invalid verification code.' }));
@@ -352,7 +353,7 @@ app.get('/api/user/code/:code', function(req, res) {
             delete user.verification_code;
             user.verified = new Date();
             db.insert(user, user._id, function(err, body) {
-              if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+              if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
               return res.status(200).send(JSON.stringify({ok:true, message: "Account verified."}));
             });
           }
@@ -374,7 +375,7 @@ app.get('/api/user/code/:code', function(req, res) {
     }
 
     db.get('org.couchdb.user:' + req.params.name, function(err,user) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
       return res.status(200).send(JSON.stringify({ok: true, user: strip(user) }));
     });
   });
@@ -389,7 +390,7 @@ app.get('/api/user/code/:code', function(req, res) {
     }
 
     db.get('org.couchdb.user:' + req.params.name, function(err, user) {
-      if (err) { return res.status( err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status( err.statusCode ? err.statusCode : 500).send(err); }
       var updates = strip(req.body);
 
       var keys = Object.keys(updates);
@@ -403,7 +404,7 @@ app.get('/api/user/code/:code', function(req, res) {
       }
 
       db.insert(user, 'org.couchdb.user:' + req.params.name, function(err, data) {
-        if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
 
         user._rev = data.rev;
 
@@ -426,10 +427,10 @@ app.get('/api/user/code/:code', function(req, res) {
       return res.status(403).send(JSON.stringify({ok:false, message: "You do not have permission to use this function."}));
     }
     db.get('org.couchdb.user:' + req.params.name, function(err,user) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
 
       db.destroy(user._id, user._rev, function(err,body) {
-        if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
 
         function respondUserDeleted() {
           res.status(200).send(JSON.stringify({ok: true, message: "User " + req.params.name + " deleted."}));
@@ -460,7 +461,7 @@ app.get('/api/user/code/:code', function(req, res) {
     }
     req.body.type = 'user';
     db.insert(req.body, 'org.couchdb.user:' + req.body.name, function(err, data) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
       res.status(200).send(JSON.stringify({ok: true, data: data}));
     });
   });
@@ -473,7 +474,7 @@ app.get('/api/user/code/:code', function(req, res) {
     if (!req.query.roles) { return res.status(400).send(JSON.stringify({ok:false, message: 'Roles are required!'})); }
     var keys = req.query.roles.split(',');
     db.view('user', 'role', {keys: keys}, function(err, body) {
-      if (err) { return res.status(err.status_code ? err.status_code : 500).send(err); }
+      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
       var users = _(body.rows).pluck('value');
       res.status(200).send(JSON.stringify({ok: true, users: stripArray(users)}));
     });
@@ -522,7 +523,7 @@ app.get('/api/user/code/:code', function(req, res) {
 
           if (body.rows && body.rows.length === 0) {
             var error = new Error('No user found with the specified email address.');
-            error.status_code = 404;
+            error.statusCode = 404;
             throw(error);
           }
 
@@ -549,7 +550,7 @@ app.get('/api/user/code/:code', function(req, res) {
           if (err) { throw(err); }
           if (!transport) {
             var error = new Error('Mail transport is not configured!');
-            error.status_code = 500;
+            error.statusCode = 500;
             throw(error);
           }
           transport.sendMail({
