@@ -8,14 +8,17 @@ var express = require('express');
 var nano = require('nano');
 var uuid = require('uuid');
 var emailTemplates = require('email-templates');
+var EmailTemplate = emailTemplates.EmailTemplate;
 var nodemailer = require('nodemailer');
 var _ = require('underscore');
 var only = require('only');
+var path = require('path');
 
 module.exports = function(config) {
   var app = express(),
+    db,
     safeUserFields = config.safeUserFields ? config.safeUserFields : "name email roles",
-    db;
+    apiPrefix = config.apiPrefix || '/api/user';
 
   function configureNano(cookie) {
     return nano({
@@ -28,13 +31,39 @@ module.exports = function(config) {
   db = configureNano();
 
   var transport;
-  try {
-    transport = nodemailer.createTransport(
-      config.email.service,
-      config.email[config.email.service]
-    );
-  } catch (err) {
+  if(config.email)
+  {
+    if (!config.email.getEmailLocale) {
+      config.email.getEmailLocale = function(user, req, cb) {
+        cb(null, null);
+      };
+    }
+    
+    
+    try {
+      transport = nodemailer.createTransport(config.email.nodemailer);
+
+    } catch (err) {
+      console.log('*** Email Service is not configured ***');
+    }
+  }
+  else {
     console.log('*** Email Service is not configured ***');
+  }
+
+  config.app = config.app || {};
+
+  if (!config.populateUser) {
+    config.populateUser = function(req, cb) {
+        delete req.body.confirm_password;
+        cb(null, req.body);
+    };
+  }
+
+  if (!config.populateVerifiedUser) {
+    config.populateVerifiedUser = function(user, cb) {
+        cb();
+    };
   }
 
   if (!config.validateUser) {
@@ -42,6 +71,7 @@ module.exports = function(config) {
       cb();
     };
   }
+
 
   // required properties on req.body
   // * String: name
@@ -51,42 +81,55 @@ module.exports = function(config) {
   //
   // ### note: you can add more properties to
   // your user registration object
-  app.post('/api/user/signup', function(req, res) {
-    if (!req.body || !req.body.name || !req.body.password || !req.body.email || !req.body.roles) {
-      return res.status(400).send(JSON.stringify({ok: false, message: 'A name, password, email address and roles are required.'}));
-    }
+  app.post(apiPrefix + '/signup', function(req, res) {
 
-    if (req.body.confirm_password) delete req.body.confirm_password;
+    config.populateUser(req, function(error, userData){
+        if(error)
+        {
+            error.ok = false;
+            res.status(err.statusCode ? err.statusCode : 500).send(error);
+            return;
+        }
 
-    req.body.type = 'user';
+        if (!userData || !userData.name || !userData.password || !userData.email || !userData.roles) {
+            res.status(400).send({ok : false, code : 'missing_params', message: 'A name, password, email address and roles are required.'});
+            return;
+        }
 
-    // Check to see whether a user with the same email address already exists.  Throw an error if it does.
-    db.view('user', 'all', { key: req.body.email }, function(err, body) {
-      if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
-      if (body.rows && body.rows.length > 0) { 
-        return res.status(400).send({ok: false, message: "A user with this email address already exists.  Try resetting your password instead."});
-      }
-
-      // We can now safely create the user.
-      db.insert(req.body, 'org.couchdb.user:' + req.body.name, done);
+        storeUser(userData);
     });
 
-    function done(err, body) {
-      if (err) { return res.status(err.statusCode).send(err); }
+    function storeUser(userData){
+      userData.type = 'user';
 
-      if (config.verify) {
-        try {
-          validateUserByEmail(req.body.email);
-          db.get(body._id, function(err,user) {
-            if (err) { return res.status(err.statusCode).send(err); }
-            res.status(200).send(JSON.stringify({ok: true, user: strip(user)}));
-          });
+      // Check to see whether a user with the same email address already exists.  Throw an error if it does.
+      db.view('user', 'all', { key: userData.email }, function(err, body) {
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
+        if (body.rows && body.rows.length > 0) {
+          return res.status(400).send({ok: false, code : 'email_already_exists', message: "A user with this email address already exists. Try resetting your password instead."});
         }
-        catch (email_err) {
-          res.status(err.statusCode).send(email_err);
+
+        // We can now safely create the user.
+        db.insert(userData, 'org.couchdb.user:' + userData.name, done);
+      });
+
+      function done(err, body) {
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
+
+        if (config.verify) {
+          try {
+            validateUserByEmail(userData.email, req);
+            db.get(body._id, function(err,user) {
+              if (err) { return res.status(err.statusCode).send(err); }
+              res.status(200).send(JSON.stringify({ok: true, user: strip(user)}));
+            });
+          }
+          catch (email_err) {
+            res.status(err.statusCode ? err.statusCode : 500).send(email_err);
+          }
+        } else {
+          res.status(200).send(JSON.stringify( _.extend(userData, {_rev: body.rev, ok: true} ) ));
         }
-      } else {
-        res.status(200).send(JSON.stringify( _.extend(req.body, {_rev: body.rev, ok: true} ) ));
       }
     }
   });
@@ -95,7 +138,7 @@ module.exports = function(config) {
   // required properties on req.body
   // * name
   // * password
-  app.post('/api/user/signin', function(req, res) {
+  app.post(apiPrefix + '/signin', function(req, res) {
     if (!req.body || !req.body.name || !req.body.password) {
       return res.status(400).send(JSON.stringify({ok: false, message: 'A name, and password are required.'}));
     }
@@ -180,7 +223,7 @@ module.exports = function(config) {
   // logout user
   // required properties on req.body
   // * name
-  app.post('/api/user/signout', function(req, res) {
+  app.post(apiPrefix + '/signout', function(req, res) {
     req.session.destroy(function (err) {
       if (err) {
         console.log('Error destroying session during logout' + err);
@@ -193,7 +236,7 @@ module.exports = function(config) {
   // forgot user password
   // required properties on req.body
   // * email
-  app.post('/api/user/forgot', function(req,res) {
+  app.post(apiPrefix + '/forgot', function(req,res) {
     if (!req.body || !req.body.email) {
       return res.status(400).send(JSON.stringify({ok: false, message: 'An email address is required.'}));
     }
@@ -225,27 +268,24 @@ module.exports = function(config) {
     // initialize the emailTemplate engine
     function createEmail(err, body) {
       if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
-      emailTemplates(config.email.templateDir, renderForgotTemplate);
-    }
-
-    // render forgot.ejs
-    function renderForgotTemplate(err, template) {
-      if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
-      // use header host for reset url
-      config.app.url = 'http://' + req.headers.host;
-      template('forgot', { user: user, app: config.app }, sendEmail);
+      if (!transport) { return res.status(500, { error: 'transport is not configured!'}); }
+      config.app.url = 'http://' + req.headers.host; // needed for backward compatibility only
+      
+      getEmailTemplate(user, req, 'forgot', function(err, template){
+        if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
+        template.render({ user: user, app: config.app, req : req}, sendEmail);
+      });
     }
 
     // send rendered template to user
-    function sendEmail(err, html, text) {
+    function sendEmail(err, result) {
       if (err) { return res.status(err.statusCode ? err.statusCode : 500, err); }
-      if (!transport) { return res.status(500, { error: 'transport is not configured!'}); }
       transport.sendMail({
         from: config.email.from,
         to: user.email,
-        subject: config.app.name + ': Reset Password Request',
-        html: html,
-        text: text }, done);
+        subject: result.subject || config.app.name + ': Reset Password Request',
+        html: result.html,
+        text: result.text }, done);
     }
 
     // complete action
@@ -257,7 +297,7 @@ module.exports = function(config) {
   });
 
 
-app.get('/api/user/code/:code', function(req, res) {
+app.get(apiPrefix + '/code/:code', function(req, res) {
   if (!req.params.code) {
     return res.status(500).send(JSON.stringify({ok: false, message: 'You must provide a code parameter.'}));
   }
@@ -283,7 +323,7 @@ app.get('/api/user/code/:code', function(req, res) {
     // required properties on req.body
     // * code (generated by /api/user/forgot)
     // * password
-    app.post('/api/user/reset', function(req, res) {
+    app.post(apiPrefix + '/reset', function(req, res) {
       if (!req.body || !req.body.code || !req.body.password) {
         return res.status(400).send(JSON.stringify({ok: false, message: 'A password and valid password reset code are required.'}));
       }
@@ -309,13 +349,13 @@ app.get('/api/user/code/:code', function(req, res) {
     // Send (or resend) verification code to a user's email address
     // required properties on req.body
     // * email
-    app.post('/api/user/verify', function(req, res) {
+    app.post(apiPrefix + '/verify', function(req, res) {
       if (!req.body || !req.body.email) {
         return res.status(400).send(JSON.stringify({ok: false, message: 'An email address must be passed as part of the query string before a verification code can be sent.'}));
       }
 
       try {
-        validateUserByEmail(req.body.email);
+        validateUserByEmail(req.body.email, req);
         res.status(200).send(JSON.stringify({ok:true, message: "Verification code sent..."}));
       }
       catch (validate_err) {
@@ -327,7 +367,7 @@ app.get('/api/user/code/:code', function(req, res) {
     // Accept a verification code and flag the user as verified.
     // required properties on req.params
     // * code
-    app.get('/api/user/verify/:code', function(req,res) {
+    app.get(apiPrefix + '/verify/:code', function(req,res) {
       if (!req.params.code) {
         return res.status(400).send(JSON.stringify({ok: false, message: 'A verification code is required.'}));
       }
@@ -352,15 +392,19 @@ app.get('/api/user/code/:code', function(req, res) {
 
             delete user.verification_code;
             user.verified = new Date();
-            db.insert(user, user._id, function(err, body) {
-              if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
-              return res.status(200).send(JSON.stringify({ok:true, message: "Account verified."}));
+
+            config.populateVerifiedUser(user, function(err){
+                if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
+                db.insert(user, user._id, function(err, body) {
+                  if (err) { return res.status(err.statusCode ? err.statusCode : 500).send(err); }
+                  return res.status(200).send(JSON.stringify({ok:true, message: "Account verified."}));
+                });
             });
           }
         });
 
     // Return the name of the currently logged in user.
-    app.get('/api/user/current', function(req, res) {
+    app.get(apiPrefix + '/current', function(req, res) {
       if (!req.session || !req.session.user) {
         return res.status(401).send(JSON.stringify({ok:false, message: "Not currently logged in."}));
       }
@@ -369,7 +413,7 @@ app.get('/api/user/code/:code', function(req, res) {
     });
 
   // Look up another user's information
-  app.get('/api/user/:name', function(req, res) {
+  app.get(apiPrefix + '/:name', function(req, res) {
     if (!req.session || !req.session.user) {
       return res.status(401).send(JSON.stringify({ok:false, message: "You must be logged in to use this function."}));
     }
@@ -381,7 +425,7 @@ app.get('/api/user/code/:code', function(req, res) {
   });
 
   // Create a new user or update an existing user
-  app.put('/api/user/:name', function(req, res) {
+  app.put(apiPrefix + '/:name', function(req, res) {
     if (!req.session || !req.session.user) {
       return res.status(401).send(JSON.stringify({ ok:false, message: "You must be logged in to use this function"}));
     }
@@ -419,7 +463,7 @@ app.get('/api/user/code/:code', function(req, res) {
   });
 
   // Delete a user
-  app.delete('/api/user/:name', function(req,res) {
+  app.delete(apiPrefix + '/:name', function(req,res) {
     if (!req.session || !req.session.user) {
       return res.status(401).send(JSON.stringify({ok: false, message: "You must be logged in to use this function"}));
     }
@@ -452,7 +496,7 @@ app.get('/api/user/code/:code', function(req, res) {
   });
 
   // Create a user
-  app.post('/api/user', function(req, res) {
+  app.post(apiPrefix + '', function(req, res) {
     if (!req.session || !req.session.user) {
       return res.status(401).send(JSON.stringify({ok:false, message: "You must be logged in to use this function"}));
     }
@@ -467,7 +511,7 @@ app.get('/api/user/code/:code', function(req, res) {
   });
 
   // Return a list of users matching one or more roles
-  app.get('/api/user', function(req, res) {
+  app.get(apiPrefix + '', function(req, res) {
     if (!req.session || !req.session.user) {
       return res.status(401).send(JSON.stringify({ok:false, message: "You must be logged in to use this function"}));
     }
@@ -513,7 +557,7 @@ app.get('/api/user/code/:code', function(req, res) {
         return false;
       }
 
-      function validateUserByEmail(email) {
+      function validateUserByEmail(email, req) {
         var user;
         // use email address to find user
         db.view('user', 'all', { key: email }, saveUserVerificationDetails);
@@ -536,17 +580,26 @@ app.get('/api/user/code/:code', function(req, res) {
         // initialize the emailTemplate engine
         function verificationEmail(err, body) {
           if (err) { throw(err); }
-          emailTemplates(config.email.templateDir, renderVerificationTemplate);
-        }
+          if (!transport) {
+            var error = new Error('Mail transport is not configured!');
+            error.statusCode = 500;
+            throw(error);
+          }
+          config.app.url = 'http://' + req.headers.host; // needed for backward compatibility only
 
-        // render verify template
-        function renderVerificationTemplate(err, template) {
-          if (err) { throw(err); }
-          template('verify', { user: user, app: config.app }, sendVerificationEmail);
+          getEmailTemplate(user, req, 'confirm', function(err, template){
+            if (err)
+            {
+              var error = new Error('Cannot load template');
+              error.nested = err;
+              throw(error);
+            }
+            template.render({ user: user, app: config.app, req : req}, sendVerificationEmail);
+          });
         }
 
         // send rendered template to user
-        function sendVerificationEmail(err, html, text) {
+        function sendVerificationEmail(err, result) {
           if (err) { throw(err); }
           if (!transport) {
             var error = new Error('Mail transport is not configured!');
@@ -556,9 +609,9 @@ app.get('/api/user/code/:code', function(req, res) {
           transport.sendMail({
             from: config.email.from,
             to: user.email,
-            subject: config.app.name + ': Please Verify Your Account',
-            html: html,
-            text: text }, done);
+            subject: result.subject || config.app.name + ': Please Verify Your Account',
+            html: result.html,
+            text: result.text }, done);
         }
 
         // complete action
@@ -568,5 +621,18 @@ app.get('/api/user/code/:code', function(req, res) {
           }
         }
 
+
+        function getEmailTemplate(user, req, type, cb)
+        {
+          config.email.getEmailLocale(user, req, function(err, locale){
+            if(err)
+              return cb(err);
+            if(!locale)
+              return cb(null, new EmailTemplate(path.join(config.email.templateDir, type)));
+            return cb(null, new EmailTemplate(path.join(config.email.templateDir, type, locale)));
+          });
+        }
+
         return app;
-      };
+      };   
+
